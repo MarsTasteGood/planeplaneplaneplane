@@ -190,6 +190,8 @@ export async function POST(req: NextRequest) {
         speed: actualFlightData.velocity ? `${Math.round(actualFlightData.velocity * 3.6)}km/h` : "不明",
         estimatedArrival: "計算中...",
         weather: "天気情報取得中...",
+        lastUpdate: actualFlightData.last_contact ? new Date(actualFlightData.last_contact * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : "不明",
+        dataAge: actualFlightData.last_contact ? `${Math.floor((Date.now() / 1000 - actualFlightData.last_contact) / 60)}分前` : "不明",
         message: `✈️ フライト ${actualFlightData.callsign || flightNumber} のリアルタイムデータを表示中です（OpenSky Network APIより）`
       }
       
@@ -208,6 +210,8 @@ export async function POST(req: NextRequest) {
 - 速度: ${actualFlightData.velocity}m/s (${Math.round((actualFlightData.velocity || 0) * 3.6)}km/h)
 - 地上状態: ${actualFlightData.on_ground ? '地上' : '飛行中'}
 - 進行方向: ${actualFlightData.true_track}度
+- 最終更新: ${actualFlightData.last_contact ? new Date(actualFlightData.last_contact * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '不明'}
+- データ経過時間: ${actualFlightData.last_contact ? Math.floor((Date.now() / 1000 - actualFlightData.last_contact) / 60) : 0}分前
 
 以下のJSONフォーマットで必ず返答してください（他の文章は一切含めず、JSONのみを返してください）:
 
@@ -225,6 +229,8 @@ export async function POST(req: NextRequest) {
   "speed": "${Math.round((actualFlightData.velocity || 0) * 3.6)}km/h",
   "estimatedArrival": "到着予定時刻を推測",
   "weather": "現在地の天気を推測",
+  "lastUpdate": "${actualFlightData.last_contact ? new Date(actualFlightData.last_contact * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '不明'}",
+  "dataAge": "${actualFlightData.last_contact ? Math.floor((Date.now() / 1000 - actualFlightData.last_contact) / 60) : 0}分前",
   "message": "OpenSky Network APIからのリアルタイム追跡データ"
 }`
 
@@ -272,6 +278,8 @@ export async function POST(req: NextRequest) {
         speed: actualFlightData.velocity ? `${Math.round(actualFlightData.velocity * 3.6)}km/h` : "不明",
         estimatedArrival: "計算中",
         weather: "天気情報取得中",
+        lastUpdate: actualFlightData.last_contact ? new Date(actualFlightData.last_contact * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : "不明",
+        dataAge: actualFlightData.last_contact ? `${Math.floor((Date.now() / 1000 - actualFlightData.last_contact) / 60)}分前` : "不明",
         message: `フライト ${actualFlightData.callsign || flightNumber} の情報をOpenSky Network APIから取得しました。AI解析に失敗したため基本データを表示中です。`
       }
     }
