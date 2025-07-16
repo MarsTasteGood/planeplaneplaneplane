@@ -1,6 +1,129 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 
+// 複数のAPIを使用してより詳細なフライト情報を取得する関数
+async function getComprehensiveFlightData(flightNumber: string) {
+  // まずOpenSkyからリアルタイム位置データを取得
+  const openSkyData = await getOpenSkyFlightData(flightNumber)
+  
+  // AviationStack APIからスケジュール情報を取得
+  const aviationStackData = await getAviationStackData(flightNumber)
+  
+  // FlightLabs APIからフライト詳細を取得
+  const flightLabsData = await getFlightLabsData(flightNumber)
+  
+  // データを統合
+  return {
+    realtime: openSkyData,
+    schedule: aviationStackData,
+    details: flightLabsData
+  }
+}
+
+// AviationStack APIからフライト情報を取得
+async function getAviationStackData(flightNumber: string) {
+  try {
+    const apiKey = process.env.AVIATIONSTACK_API_KEY
+    if (!apiKey) {
+      console.log('AviationStack API key not configured')
+      return null
+    }
+    
+    const response = await fetch(
+      `http://api.aviationstack.com/v1/flights?access_key=${apiKey}&flight_iata=${flightNumber}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; FlightTracker/1.0)'
+        }
+      }
+    )
+    
+    if (!response.ok) {
+      throw new Error(`AviationStack API error: ${response.status}`)
+    }
+    
+    const data = await response.json()
+    
+    if (data.data && data.data.length > 0) {
+      const flight = data.data[0]
+      return {
+        source: 'aviationstack',
+        flight_number: flight.flight?.iata,
+        airline: flight.airline?.name,
+        aircraft: flight.aircraft?.registration,
+        departure: {
+          airport: flight.departure?.airport,
+          scheduled: flight.departure?.scheduled,
+          estimated: flight.departure?.estimated,
+          actual: flight.departure?.actual,
+          terminal: flight.departure?.terminal,
+          gate: flight.departure?.gate
+        },
+        arrival: {
+          airport: flight.arrival?.airport,
+          scheduled: flight.arrival?.scheduled,
+          estimated: flight.arrival?.estimated,
+          actual: flight.arrival?.actual,
+          terminal: flight.arrival?.terminal,
+          gate: flight.arrival?.gate
+        },
+        status: flight.flight_status
+      }
+    }
+    
+    return null
+  } catch (error) {
+    console.error('AviationStack API error:', error)
+    return null
+  }
+}
+
+// FlightLabs APIからフライト情報を取得
+async function getFlightLabsData(flightNumber: string) {
+  try {
+    const apiKey = process.env.FLIGHTLABS_API_KEY
+    if (!apiKey) {
+      console.log('FlightLabs API key not configured')
+      return null
+    }
+    
+    const response = await fetch(
+      `https://app.goflightlabs.com/flights?access_key=${apiKey}&flight_iata=${flightNumber}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; FlightTracker/1.0)'
+        }
+      }
+    )
+    
+    if (!response.ok) {
+      throw new Error(`FlightLabs API error: ${response.status}`)
+    }
+    
+    const data = await response.json()
+    
+    if (data.data && data.data.length > 0) {
+      const flight = data.data[0]
+      return {
+        source: 'flightlabs',
+        flight_number: flight.flight_number,
+        airline: flight.airline?.name,
+        aircraft: {
+          model: flight.aircraft?.model,
+          registration: flight.aircraft?.registration
+        },
+        route: flight.route,
+        status: flight.status
+      }
+    }
+    
+    return null
+  } catch (error) {
+    console.error('FlightLabs API error:', error)
+    return null
+  }
+}
+
 // OpenSky Network APIを使用してリアルタイムフライトデータを取得する関数
 async function getOpenSkyFlightData(flightNumber: string) {
   try {
@@ -156,10 +279,12 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // OpenSky Network APIから実際のフライトデータを取得
-    const actualFlightData = await getOpenSkyFlightData(flightNumber)
+    console.log(`🔍 Comprehensive search for flight: ${flightNumber}`)
+
+    // 複数のAPIから包括的なフライトデータを取得
+    const comprehensiveData = await getComprehensiveFlightData(flightNumber)
     
-    if (!actualFlightData) {
+    if (!comprehensiveData.realtime && !comprehensiveData.schedule && !comprehensiveData.details) {
       return NextResponse.json(
         { error: 'フライト情報が見つかりませんでした。便名を確認してください。' },
         { status: 404 }
@@ -171,72 +296,33 @@ export async function POST(req: NextRequest) {
       apiKey: process.env.ANTHROPIC_API_KEY,
     })
 
-    // Claude APIキーが正しく設定されているかチェック
+    // 取得したデータを統合して詳細な情報を作成
+    const integratedData = {
+      // リアルタイム位置情報（OpenSky）
+      realtime: comprehensiveData.realtime,
+      // スケジュール情報（AviationStack）
+      schedule: comprehensiveData.schedule,
+      // 詳細情報（FlightLabs）
+      details: comprehensiveData.details,
+      // 検索されたフライト番号
+      searchedFlight: flightNumber
+    }
+
+    // Claude APIキーが設定されているかチェック
     if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'ANTHROPIC_API_KEY') {
-      console.log('⚠️ Claude API key not configured, using basic OpenSky data only')
+      console.log('⚠️ Claude API key not configured, creating basic integrated data')
       
-      // APIキーが設定されていない場合はOpenSkyデータから直接作成
-      const basicFlightData = {
-        status: actualFlightData.on_ground ? "地上" : "飛行中",
-        currentLocation: {
-          latitude: actualFlightData.latitude || 35.6762,
-          longitude: actualFlightData.longitude || 139.6503,
-          city: "位置解析中...",
-          region: actualFlightData.origin_country || "不明"
-        },
-        origin: actualFlightData.origin_country || "不明",
-        destination: "到着地解析中...",
-        altitude: actualFlightData.baro_altitude ? `${actualFlightData.baro_altitude}m` : "不明",
-        speed: actualFlightData.velocity ? `${Math.round(actualFlightData.velocity * 3.6)}km/h` : "不明",
-        estimatedArrival: "計算中...",
-        weather: "天気情報取得中...",
-        lastUpdate: actualFlightData.last_contact ? new Date(actualFlightData.last_contact * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : "不明",
-        dataAge: actualFlightData.last_contact ? `${Math.floor((Date.now() / 1000 - actualFlightData.last_contact) / 60)}分前` : "不明",
-        message: `✈️ フライト ${actualFlightData.callsign || flightNumber} のリアルタイムデータを表示中です（OpenSky Network APIより）`
-      }
-      
+      // APIキーが設定されていない場合は統合データから基本情報を作成
+      const basicFlightData = createBasicFlightResponse(integratedData)
       return NextResponse.json(basicFlightData)
     }
 
-    // 実際のデータを基にClaude AIで追加情報を生成
-    const prompt = `
-以下のOpenSky Network APIから取得したリアルタイムフライトデータを日本語で解析してください。
-
-フライトデータ:
-- コールサイン: ${actualFlightData.callsign || flightNumber}
-- 出発国: ${actualFlightData.origin_country}
-- 現在位置: 緯度${actualFlightData.latitude}, 経度${actualFlightData.longitude}
-- 高度: ${actualFlightData.baro_altitude}m
-- 速度: ${actualFlightData.velocity}m/s (${Math.round((actualFlightData.velocity || 0) * 3.6)}km/h)
-- 地上状態: ${actualFlightData.on_ground ? '地上' : '飛行中'}
-- 進行方向: ${actualFlightData.true_track}度
-- 最終更新: ${actualFlightData.last_contact ? new Date(actualFlightData.last_contact * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '不明'}
-- データ経過時間: ${actualFlightData.last_contact ? Math.floor((Date.now() / 1000 - actualFlightData.last_contact) / 60) : 0}分前
-
-以下のJSONフォーマットで必ず返答してください（他の文章は一切含めず、JSONのみを返してください）:
-
-{
-  "status": "${actualFlightData.on_ground ? '地上' : '飛行中'}",
-  "currentLocation": {
-    "latitude": ${actualFlightData.latitude || 35.6762},
-    "longitude": ${actualFlightData.longitude || 139.6503},
-    "city": "現在地の都市名を推測",
-    "region": "${actualFlightData.origin_country || '不明'}"
-  },
-  "origin": "出発地を推測",
-  "destination": "到着地を推測", 
-  "altitude": "${actualFlightData.baro_altitude || 0}m",
-  "speed": "${Math.round((actualFlightData.velocity || 0) * 3.6)}km/h",
-  "estimatedArrival": "到着予定時刻を推測",
-  "weather": "現在地の天気を推測",
-  "lastUpdate": "${actualFlightData.last_contact ? new Date(actualFlightData.last_contact * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '不明'}",
-  "dataAge": "${actualFlightData.last_contact ? Math.floor((Date.now() / 1000 - actualFlightData.last_contact) / 60) : 0}分前",
-  "message": "OpenSky Network APIからのリアルタイム追跡データ"
-}`
+    // Claude AIで詳細な解析を実行
+    const prompt = createComprehensivePrompt(integratedData)
 
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 1500,
       messages: [{ role: 'user', content: prompt }],
     })
 
@@ -245,43 +331,22 @@ export async function POST(req: NextRequest) {
     // JSONレスポンスをパース
     let flightData
     try {
-      // レスポンスからJSONのみを抽出
       const jsonMatch = responseText.match(/\{[\s\S]*\}/)
       const jsonString = jsonMatch ? jsonMatch[0] : responseText
       
       console.log('Claude AI response:', responseText)
-      console.log('Extracted JSON:', jsonString)
       
       flightData = JSON.parse(jsonString)
       
-      // 必須フィールドの検証
       if (!flightData.status || !flightData.currentLocation) {
         throw new Error('Invalid response structure')
       }
       
     } catch (parseError) {
       console.error('JSON parse error:', parseError)
-      console.error('Raw response:', responseText)
       
-      // パースに失敗した場合はOpenSkyデータから基本情報を作成
-      flightData = {
-        status: actualFlightData.on_ground ? "地上" : "飛行中",
-        currentLocation: {
-          latitude: actualFlightData.latitude || 35.6762,
-          longitude: actualFlightData.longitude || 139.6503,
-          city: "位置情報解析中",
-          region: actualFlightData.origin_country || "不明"
-        },
-        origin: actualFlightData.origin_country || "不明",
-        destination: "到着地解析中",
-        altitude: actualFlightData.baro_altitude ? `${actualFlightData.baro_altitude}m` : "不明",
-        speed: actualFlightData.velocity ? `${Math.round(actualFlightData.velocity * 3.6)}km/h` : "不明",
-        estimatedArrival: "計算中",
-        weather: "天気情報取得中",
-        lastUpdate: actualFlightData.last_contact ? new Date(actualFlightData.last_contact * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : "不明",
-        dataAge: actualFlightData.last_contact ? `${Math.floor((Date.now() / 1000 - actualFlightData.last_contact) / 60)}分前` : "不明",
-        message: `フライト ${actualFlightData.callsign || flightNumber} の情報をOpenSky Network APIから取得しました。AI解析に失敗したため基本データを表示中です。`
-      }
+      // パースに失敗した場合は基本統合データを返す
+      flightData = createBasicFlightResponse(integratedData)
     }
 
     return NextResponse.json(flightData)
@@ -292,4 +357,134 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     )
   }
+}
+
+// 統合データから基本的なレスポンスを作成する関数
+function createBasicFlightResponse(integratedData: any) {
+  const realtime = integratedData.realtime
+  const schedule = integratedData.schedule
+  const details = integratedData.details
+  
+  return {
+    status: schedule?.status || (realtime?.on_ground ? "地上" : "飛行中") || "状況不明",
+    flightNumber: schedule?.flight_number || details?.flight_number || integratedData.searchedFlight,
+    airline: schedule?.airline || details?.airline || "不明",
+    aircraft: {
+      model: details?.aircraft?.model || "不明",
+      registration: schedule?.aircraft || details?.aircraft?.registration || "不明"
+    },
+    currentLocation: {
+      latitude: realtime?.latitude || null,
+      longitude: realtime?.longitude || null,
+      city: "位置解析中...",
+      region: realtime?.origin_country || "不明"
+    },
+    departure: {
+      airport: schedule?.departure?.airport || "不明",
+      scheduled: schedule?.departure?.scheduled || "不明",
+      estimated: schedule?.departure?.estimated || "不明",
+      actual: schedule?.departure?.actual || "不明",
+      terminal: schedule?.departure?.terminal || "不明",
+      gate: schedule?.departure?.gate || "不明"
+    },
+    arrival: {
+      airport: schedule?.arrival?.airport || "不明", 
+      scheduled: schedule?.arrival?.scheduled || "不明",
+      estimated: schedule?.arrival?.estimated || "不明",
+      actual: schedule?.arrival?.actual || "不明",
+      terminal: schedule?.arrival?.terminal || "不明",
+      gate: schedule?.arrival?.gate || "不明"
+    },
+    altitude: realtime?.baro_altitude ? `${realtime.baro_altitude}m` : "不明",
+    speed: realtime?.velocity ? `${Math.round(realtime.velocity * 3.6)}km/h` : "不明",
+    lastUpdate: realtime?.last_contact ? new Date(realtime.last_contact * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : "不明",
+    dataAge: realtime?.last_contact ? `${Math.floor((Date.now() / 1000 - realtime.last_contact) / 60)}分前` : "不明",
+    dataSources: [
+      realtime ? 'OpenSky Network (リアルタイム位置)' : null,
+      schedule ? 'AviationStack (スケジュール)' : null,
+      details ? 'FlightLabs (詳細情報)' : null
+    ].filter(Boolean),
+    message: "複数のAPIから統合されたフライト情報です"
+  }
+}
+
+// Claude AI用の包括的なプロンプトを作成する関数
+function createComprehensivePrompt(integratedData: any) {
+  const realtime = integratedData.realtime
+  const schedule = integratedData.schedule  
+  const details = integratedData.details
+  
+  return `
+以下の複数のAPIから取得したフライト情報を統合して、日本語で詳細に解析してください。
+
+【リアルタイム位置データ（OpenSky Network）】
+${realtime ? `
+- コールサイン: ${realtime.callsign}
+- 現在位置: 緯度${realtime.latitude}, 経度${realtime.longitude}
+- 高度: ${realtime.baro_altitude}m
+- 速度: ${realtime.velocity}m/s (${Math.round((realtime.velocity || 0) * 3.6)}km/h)
+- 地上状態: ${realtime.on_ground ? '地上' : '飛行中'}
+- 最終更新: ${new Date(realtime.last_contact * 1000).toLocaleString('ja-JP')}
+` : 'リアルタイムデータなし'}
+
+【スケジュール情報（AviationStack）】
+${schedule ? `
+- フライト番号: ${schedule.flight_number}
+- 航空会社: ${schedule.airline}
+- 機体登録番号: ${schedule.aircraft}
+- 出発空港: ${schedule.departure?.airport}
+- 到着空港: ${schedule.arrival?.airport}  
+- 出発予定: ${schedule.departure?.scheduled}
+- 到着予定: ${schedule.arrival?.scheduled}
+- フライト状況: ${schedule.status}
+` : 'スケジュール情報なし'}
+
+【詳細情報（FlightLabs）】
+${details ? `
+- フライト番号: ${details.flight_number}
+- 航空会社: ${details.airline}
+- 機種: ${details.aircraft?.model}
+- 運航状況: ${details.status}
+` : '詳細情報なし'}
+
+これらの情報を統合して、以下のJSONフォーマットで返してください：
+
+{
+  "status": "統合されたフライト状況",
+  "flightNumber": "フライト番号",
+  "airline": "航空会社名",
+  "aircraft": {
+    "model": "機種名",
+    "registration": "機体登録番号"
+  },
+  "currentLocation": {
+    "latitude": 現在の緯度,
+    "longitude": 現在の経度,
+    "city": "現在地の都市名",
+    "region": "現在地の地域名"
+  },
+  "departure": {
+    "airport": "出発空港",
+    "scheduled": "出発予定時刻",
+    "estimated": "出発予想時刻", 
+    "actual": "実際の出発時刻",
+    "terminal": "出発ターミナル",
+    "gate": "出発ゲート"
+  },
+  "arrival": {
+    "airport": "到着空港",
+    "scheduled": "到着予定時刻",
+    "estimated": "到着予想時刻",
+    "actual": "実際の到着時刻", 
+    "terminal": "到着ターミナル",
+    "gate": "到着ゲート"
+  },
+  "altitude": "現在高度",
+  "speed": "現在速度",
+  "weather": "現在地の天気",
+  "lastUpdate": "データ最終更新時刻",
+  "dataAge": "データ経過時間",
+  "message": "総合的な状況説明"
+}
+`
 }
