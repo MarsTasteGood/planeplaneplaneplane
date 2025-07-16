@@ -268,13 +268,270 @@ async function getOpenSkyFlightData(flightNumber: string) {
   }
 }
 
+// 現在飛行中のフライトリストを取得する関数
+async function getCurrentlyFlyingFlights() {
+  try {
+    console.log('🔍 Getting currently flying flights...')
+    
+    const response = await fetch('https://opensky-network.org/api/states/all', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; FlightTracker/1.0)'
+      }
+    })
+    
+    if (!response.ok) {
+      return []
+    }
+    
+    const data = await response.json()
+    
+    if (!data.states || data.states.length === 0) {
+      return []
+    }
+    
+    // 日本の航空会社のフライトを優先的に抽出
+    const japaneseAirlines = ['ANA', 'JAL', 'SKY', 'JJP', 'SFJ', 'ADO', 'IBX', 'JTA', 'RAC']
+    const internationalAirlines = ['UAL', 'DAL', 'AAL', 'BAW', 'AFR', 'DLH', 'KLM', 'SWR', 'ACA', 'CPA']
+    
+    const flights = data.states
+      .filter((state: any[]) => {
+        const callsign = state[1]?.trim()
+        return callsign && callsign.length >= 3 && !state[8] // 飛行中のみ
+      })
+      .slice(0, 50) // 最初の50フライトのみ
+      .map((state: any[]) => ({
+        callsign: state[1]?.trim(),
+        country: state[2],
+        latitude: state[6],
+        longitude: state[5],
+        altitude: state[7],
+        velocity: state[9]
+      }))
+      .filter((flight: any) => flight.callsign)
+    
+    // 日本の航空会社を優先
+    const priorityFlights = flights.filter((flight: any) => 
+      japaneseAirlines.some(airline => flight.callsign.startsWith(airline))
+    )
+    
+    // 国際線も含める
+    const internationalFlights = flights.filter((flight: any) =>
+      internationalAirlines.some(airline => flight.callsign.startsWith(airline))
+    )
+    
+    // その他のフライト
+    const otherFlights = flights.filter((flight: any) =>
+      !japaneseAirlines.some(airline => flight.callsign.startsWith(airline)) &&
+      !internationalAirlines.some(airline => flight.callsign.startsWith(airline))
+    )
+    
+    return [
+      ...priorityFlights.slice(0, 10),
+      ...internationalFlights.slice(0, 5),
+      ...otherFlights.slice(0, 5)
+    ]
+    
+  } catch (error) {
+    console.error('Error getting available flights:', error)
+    return [
+      { callsign: 'ANA123', suggestion: '全日空の国内線' },
+      { callsign: 'JAL456', suggestion: '日本航空の国内線' },
+      { callsign: 'SKY789', suggestion: 'スカイマークの国内線' }
+    ]
+  }
+}
+
+// ルート検索を処理する関数
+async function handleRouteSearch(departure: string, arrival: string) {
+  try {
+    console.log(`🛫 Route search: ${departure} → ${arrival}`)
+    
+    // 空港コードのマッピング
+    const airportMapping: { [key: string]: string[] } = {
+      '羽田': ['RJTT', 'HND', 'Tokyo Haneda'],
+      '成田': ['RJAA', 'NRT', 'Tokyo Narita'],
+      '新千歳': ['RJCC', 'CTS', 'New Chitose'],
+      '伊丹': ['RJOO', 'ITM', 'Osaka Itami'],
+      '関西': ['RJBB', 'KIX', 'Kansai'],
+      '中部': ['RJGG', 'NGO', 'Centrair'],
+      '福岡': ['RJFF', 'FUK', 'Fukuoka'],
+      '那覇': ['ROAH', 'OKA', 'Naha'],
+      '仙台': ['RJSS', 'SDJ', 'Sendai'],
+      '広島': ['RJOA', 'HIJ', 'Hiroshima']
+    }
+    
+    // 入力された空港名をコードに変換
+    const getDeparturePatterns = (input: string) => {
+      const normalized = input.trim()
+      if (airportMapping[normalized]) {
+        return airportMapping[normalized]
+      }
+      return [normalized.toUpperCase()]
+    }
+    
+    const getArrivalPatterns = (input: string) => {
+      const normalized = input.trim()
+      if (airportMapping[normalized]) {
+        return airportMapping[normalized]
+      }
+      return [normalized.toUpperCase()]
+    }
+    
+    const departurePatterns = getDeparturePatterns(departure)
+    const arrivalPatterns = getArrivalPatterns(arrival)
+    
+    console.log(`🔍 Searching for routes: ${departurePatterns.join(', ')} → ${arrivalPatterns.join(', ')}`)
+    
+    // 現在飛行中のフライトを取得
+    const response = await fetch('https://opensky-network.org/api/states/all', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; FlightTracker/1.0)'
+      }
+    })
+    
+    if (!response.ok) {
+      throw new Error(`OpenSky API error: ${response.status}`)
+    }
+    
+    const data = await response.json()
+    
+    if (!data.states || data.states.length === 0) {
+      return NextResponse.json({
+        error: '現在飛行中のフライトデータが取得できませんでした',
+        suggestion: '少し時間をおいて再度お試しください'
+      }, { status: 404 })
+    }
+    
+    // 日本周辺のフライトをフィルタリング
+    const japanFlights = data.states
+      .filter((state: any[]) => {
+        const callsign = state[1]?.trim()
+        const lat = state[6]
+        const lon = state[5]
+        
+        // 日本周辺の範囲をチェック（北緯24-46度、東経123-146度）
+        return callsign && 
+               lat && lon &&
+               lat >= 24 && lat <= 46 &&
+               lon >= 123 && lon <= 146 &&
+               !state[8] // 飛行中のみ
+      })
+      .map((state: any[]) => ({
+        callsign: state[1]?.trim(),
+        country: state[2],
+        latitude: state[6],
+        longitude: state[5],
+        altitude: state[7],
+        velocity: state[9],
+        icao24: state[0]
+      }))
+    
+    console.log(`📊 Found ${japanFlights.length} flights in Japan region`)
+    
+    // 現在のフライトをリストアップしてルート検索の候補として返す
+    const routeFlights = japanFlights
+      .filter((flight: any) => flight.callsign && flight.callsign.length >= 3)
+      .slice(0, 20)
+    
+    return NextResponse.json({
+      searchType: 'route',
+      departure: departure,
+      arrival: arrival,
+      message: `${departure}から${arrival}への現在のフライトを検索中...`,
+      availableFlights: routeFlights,
+      searchTips: [
+        "具体的な便名での検索をお試しください",
+        "例: ANA123, JAL456など",
+        "リアルタイムでの正確なルート検索は外部APIが必要です"
+      ],
+      suggestion: "上記のフライトから詳細を確認したい便名を選択してください"
+    })
+    
+  } catch (error) {
+    console.error('Route search error:', error)
+    return NextResponse.json({
+      error: 'ルート検索でエラーが発生しました',
+      suggestion: '便名での検索をお試しください'
+    }, { status: 500 })
+  }
+}
+
+// フライト番号検索を処理する関数
+async function handleFlightNumberSearch(comprehensiveData: any, flightNumber: string) {
+  // Anthropic Claudeクライアントを初期化
+  const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+  })
+
+  // 取得したデータを統合して詳細な情報を作成
+  const integratedData = {
+    // リアルタイム位置情報（OpenSky）
+    realtime: comprehensiveData.realtime,
+    // スケジュール情報（AviationStack）
+    schedule: comprehensiveData.schedule,
+    // 詳細情報（FlightLabs）
+    details: comprehensiveData.details,
+    // 検索されたフライト番号
+    searchedFlight: flightNumber
+  }
+
+  // Claude APIキーが設定されているかチェック
+  if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'ANTHROPIC_API_KEY') {
+    console.log('⚠️ Claude API key not configured, creating basic integrated data')
+    
+    // APIキーが設定されていない場合は統合データから基本情報を作成
+    const basicFlightData = createBasicFlightResponse(integratedData)
+    return NextResponse.json(basicFlightData)
+  }
+
+  // Claude AIで詳細な解析を実行
+  const prompt = createComprehensivePrompt(integratedData)
+
+  const message = await anthropic.messages.create({
+    model: 'claude-3-5-sonnet-20241022',
+    max_tokens: 1500,
+    messages: [{ role: 'user', content: prompt }],
+  })
+
+  const responseText = message.content[0]?.type === 'text' ? message.content[0].text : ''
+
+  // JSONレスポンスをパース
+  let flightData
+  try {
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/)
+    const jsonString = jsonMatch ? jsonMatch[0] : responseText
+    
+    console.log('Claude AI response:', responseText)
+    
+    flightData = JSON.parse(jsonString)
+    
+    if (!flightData.status || !flightData.currentLocation) {
+      throw new Error('Invalid response structure')
+    }
+    
+  } catch (parseError) {
+    console.error('JSON parse error:', parseError)
+    
+    // パースに失敗した場合は基本統合データを返す
+    flightData = createBasicFlightResponse(integratedData)
+  }
+
+  return NextResponse.json(flightData)
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { aircraftModel, flightNumber } = await req.json()
+    const { aircraftModel, flightNumber, departure, arrival } = await req.json()
+
+    // フライト番号での検索かルート検索かを判定
+    if (departure && arrival) {
+      console.log(`🔍 Route search: ${departure} → ${arrival}`)
+      return await handleRouteSearch(departure, arrival)
+    }
 
     if (!flightNumber) {
       return NextResponse.json(
-        { error: '便名が必要です' },
+        { error: '便名または出発地・到着地が必要です' },
         { status: 400 }
       )
     }
@@ -284,72 +541,49 @@ export async function POST(req: NextRequest) {
     // 複数のAPIから包括的なフライトデータを取得
     const comprehensiveData = await getComprehensiveFlightData(flightNumber)
     
-    if (!comprehensiveData.realtime && !comprehensiveData.schedule && !comprehensiveData.details) {
-      return NextResponse.json(
-        { error: 'フライト情報が見つかりませんでした。便名を確認してください。' },
-        { status: 404 }
-      )
-    }
-
-    // Anthropic Claudeクライアントを初期化
-    const anthropic = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-    })
-
-    // 取得したデータを統合して詳細な情報を作成
-    const integratedData = {
-      // リアルタイム位置情報（OpenSky）
-      realtime: comprehensiveData.realtime,
-      // スケジュール情報（AviationStack）
-      schedule: comprehensiveData.schedule,
-      // 詳細情報（FlightLabs）
-      details: comprehensiveData.details,
-      // 検索されたフライト番号
-      searchedFlight: flightNumber
-    }
-
-    // Claude APIキーが設定されているかチェック
-    if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'ANTHROPIC_API_KEY') {
-      console.log('⚠️ Claude API key not configured, creating basic integrated data')
+    // OpenSkyで見つからない場合は、より広範囲で検索を試行
+    if (!comprehensiveData.realtime) {
+      console.log('🔄 Trying broader search patterns...')
       
-      // APIキーが設定されていない場合は統合データから基本情報を作成
-      const basicFlightData = createBasicFlightResponse(integratedData)
-      return NextResponse.json(basicFlightData)
-    }
-
-    // Claude AIで詳細な解析を実行
-    const prompt = createComprehensivePrompt(integratedData)
-
-    const message = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 1500,
-      messages: [{ role: 'user', content: prompt }],
-    })
-
-    const responseText = message.content[0]?.type === 'text' ? message.content[0].text : ''
-
-    // JSONレスポンスをパース
-    let flightData
-    try {
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/)
-      const jsonString = jsonMatch ? jsonMatch[0] : responseText
+      // より広範囲な検索パターンを試行
+      const broaderPatterns = [
+        flightNumber.substring(0, 3), // 航空会社コードのみ
+        flightNumber.substring(0, 2), // 2文字の航空会社コード
+        flightNumber.toUpperCase().replace(/\d+/g, ''), // 数字を除去
+      ]
       
-      console.log('Claude AI response:', responseText)
-      
-      flightData = JSON.parse(jsonString)
-      
-      if (!flightData.status || !flightData.currentLocation) {
-        throw new Error('Invalid response structure')
+      for (const pattern of broaderPatterns) {
+        if (pattern.length >= 2) {
+          const broaderData = await getOpenSkyFlightData(pattern)
+          if (broaderData) {
+            comprehensiveData.realtime = broaderData
+            console.log(`✅ Found flight with broader pattern: ${pattern}`)
+            break
+          }
+        }
       }
+    }
+    
+    if (!comprehensiveData.realtime && !comprehensiveData.schedule && !comprehensiveData.details) {
+      // それでも見つからない場合は、現在飛行中のフライトの例を返す
+      console.log('🔍 No specific flight found, showing available flights...')
       
-    } catch (parseError) {
-      console.error('JSON parse error:', parseError)
+      const availableFlights = await getCurrentlyFlyingFlights()
       
-      // パースに失敗した場合は基本統合データを返す
-      flightData = createBasicFlightResponse(integratedData)
+      return NextResponse.json({
+        error: `フライト ${flightNumber} が見つかりませんでした。現在飛行中のフライトを確認してください。`,
+        suggestion: `以下のフライト番号で検索してみてください：`,
+        availableFlights: availableFlights,
+        searchTips: [
+          "ANA、JAL、SKY などの航空会社コードで検索",
+          "完全なフライト番号（例：ANA123、JAL456）で検索", 
+          "国際線の場合はIATA/ICAOコードを使用",
+          "出発地・到着地での検索も可能（例：羽田→新千歳）"
+        ]
+      }, { status: 404 })
     }
 
-    return NextResponse.json(flightData)
+    return await handleFlightNumberSearch(comprehensiveData, flightNumber)
   } catch (error) {
     console.error('Flight tracking error:', error)
     return NextResponse.json(
