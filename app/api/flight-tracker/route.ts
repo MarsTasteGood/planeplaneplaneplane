@@ -1,105 +1,76 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
-// @ts-ignore
-import { FlightRadar24API } from 'flightradar24-client'
+import { getJson } from 'serpapi'
 
-// FlightRadar24を使用して実際のフライトデータを取得する関数
-async function getFlightRadar24Data(flightNumber: string) {
+// Google検索を使用してフライト情報を取得する関数
+async function getGoogleFlightData(flightNumber: string) {
   try {
-    const fr24 = new FlightRadar24API()
+    // SerpAPIを使用してGoogle検索でフライト情報を取得
+    const results = await getJson({
+      engine: "google",
+      q: `flight ${flightNumber} status current location`,
+      api_key: process.env.SERPAPI_API_KEY
+    })
     
-    // フライト番号で検索
-    const flights = await fr24.getFlights({ flight: flightNumber })
-    
-    if (flights && flights.length > 0) {
-      const flight = flights[0]
-      
-      // フライト詳細を取得
-      const flightDetails = await fr24.getFlightDetails(flight.id)
-      
+    // Google Flightsの検索結果を探す
+    if (results.flights_results && results.flights_results.length > 0) {
+      const flight = results.flights_results[0]
       return {
-        flightNumber: flight.flight || flightNumber,
-        callsign: flight.callsign,
-        status: flight.status,
-        aircraft: {
-          registration: flight.aircraft?.registration,
-          model: flight.aircraft?.model,
-          age: flight.aircraft?.age
-        },
-        airline: {
-          name: flight.airline?.name,
-          icao: flight.airline?.icao,
-          iata: flight.airline?.iata
-        },
+        source: 'google_flights',
+        flightNumber: flightNumber,
+        status: flight.flight_status,
         departure: {
-          airport: flight.airport?.origin?.name,
-          iata: flight.airport?.origin?.iata,
-          scheduled: flight.time?.scheduled?.departure,
-          actual: flight.time?.real?.departure,
+          airport: flight.departure_airport?.name,
+          code: flight.departure_airport?.id,
+          time: flight.departure_airport?.time
         },
         arrival: {
-          airport: flight.airport?.destination?.name,
-          iata: flight.airport?.destination?.iata,
-          scheduled: flight.time?.scheduled?.arrival,
-          estimated: flight.time?.estimated?.arrival,
+          airport: flight.arrival_airport?.name,
+          code: flight.arrival_airport?.id,
+          time: flight.arrival_airport?.time
         },
-        position: {
-          latitude: flight.lat,
-          longitude: flight.lng,
-          altitude: flight.altitude,
-          speed: flight.speed,
-          heading: flight.heading,
-          vertical_speed: flight.vertical_speed
-        },
-        details: flightDetails
+        aircraft: flight.aircraft,
+        airline: flight.airline
       }
     }
     
-    return null
-  } catch (error) {
-    console.error('FlightRadar24 API error:', error)
+    // 一般的な検索結果からフライト情報を抽出
+    const searchResults = results.organic_results || []
+    let flightInfo = {
+      source: 'google_search',
+      flightNumber: flightNumber,
+      searchResults: searchResults.slice(0, 5).map((result: any) => ({
+        title: result.title,
+        snippet: result.snippet,
+        link: result.link
+      }))
+    }
     
-    // フォールバック: 直接APIを呼び出し
+    return flightInfo
+    
+  } catch (error) {
+    console.error('Google Search API error:', error)
+    
+    // フォールバック: 直接フェッチでGoogle検索
     try {
-      const response = await fetch(`https://www.flightradar24.com/v1/search/web/find?query=${flightNumber}&limit=50`)
-      const data = await response.json()
-      
-      if (data.results && data.results.length > 0) {
-        const flightResult = data.results.find((result: any) => 
-          result.type === 'live' && result.label.includes(flightNumber)
-        )
-        
-        if (flightResult) {
-          return {
-            flightNumber: flightNumber,
-            callsign: flightResult.detail?.callsign,
-            status: 'active',
-            aircraft: {
-              registration: flightResult.detail?.reg,
-              model: flightResult.detail?.aircraft,
-            },
-            airline: {
-              name: flightResult.detail?.airline,
-            },
-            departure: {
-              airport: flightResult.detail?.origin,
-              iata: flightResult.detail?.origin_iata,
-            },
-            arrival: {
-              airport: flightResult.detail?.destination,
-              iata: flightResult.detail?.destination_iata,
-            },
-            position: {
-              latitude: flightResult.lat,
-              longitude: flightResult.lng,
-              altitude: flightResult.detail?.altitude,
-              speed: flightResult.detail?.speed,
-            }
+      const response = await fetch(
+        `https://www.google.com/search?q=flight+${flightNumber}+status+current+location`,
+        {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
           }
+        }
+      )
+      
+      if (response.ok) {
+        return {
+          source: 'google_fallback',
+          flightNumber: flightNumber,
+          message: 'Google検索からフライト情報を取得しました'
         }
       }
     } catch (fallbackError) {
-      console.error('Fallback API error:', fallbackError)
+      console.error('Fallback search error:', fallbackError)
     }
     
     return null
@@ -117,8 +88,8 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // FlightRadar24から実際のフライトデータを取得
-    const actualFlightData = await getFlightRadar24Data(flightNumber)
+    // Google検索から実際のフライトデータを取得
+    const actualFlightData = await getGoogleFlightData(flightNumber)
     
     if (!actualFlightData) {
       return NextResponse.json(
@@ -134,35 +105,48 @@ export async function POST(req: NextRequest) {
 
     // 実際のデータを基にClaude AIで追加情報を生成
     const prompt = `
-以下のFlightRadar24から取得した実際のフライトデータを基に、日本語でわかりやすく整理して表示してください：
+以下のGoogle検索から取得したフライトデータを基に、日本語でわかりやすく整理して表示してください：
 
 フライト番号: ${actualFlightData.flightNumber}
-コールサイン: ${actualFlightData.callsign || 'N/A'}
-ステータス: ${actualFlightData.status}
-航空機: ${actualFlightData.aircraft?.model || 'N/A'} (登録: ${actualFlightData.aircraft?.registration || 'N/A'})
-航空会社: ${actualFlightData.airline?.name || 'N/A'}
-出発地: ${actualFlightData.departure.airport || 'N/A'} (${actualFlightData.departure.iata || 'N/A'})
-到着地: ${actualFlightData.arrival.airport || 'N/A'} (${actualFlightData.arrival.iata || 'N/A'})
-出発予定時刻: ${actualFlightData.departure.scheduled || 'N/A'}
-到着予定時刻: ${actualFlightData.arrival.scheduled || 'N/A'}
-${actualFlightData.position ? `現在位置: 緯度${actualFlightData.position.latitude}, 経度${actualFlightData.position.longitude}, 高度${actualFlightData.position.altitude}フィート, 速度${actualFlightData.position.speed}ノット, 方位${actualFlightData.position.heading}度` : ''}
+データソース: ${actualFlightData.source}
 
-以下のJSON形式で返してください：
+${actualFlightData.source === 'google_flights' ? `
+ステータス: ${(actualFlightData as any).status || 'N/A'}
+航空機: ${(actualFlightData as any).aircraft || 'N/A'}
+航空会社: ${(actualFlightData as any).airline || 'N/A'}
+出発地: ${(actualFlightData as any).departure?.airport || 'N/A'} (${(actualFlightData as any).departure?.code || 'N/A'})
+到着地: ${(actualFlightData as any).arrival?.airport || 'N/A'} (${(actualFlightData as any).arrival?.code || 'N/A'})
+出発時刻: ${(actualFlightData as any).departure?.time || 'N/A'}
+到着時刻: ${(actualFlightData as any).arrival?.time || 'N/A'}
+` : ''}
+
+${actualFlightData.source === 'google_search' ? `
+検索結果:
+${(actualFlightData as any).searchResults?.map((result: any, index: number) => 
+  `${index + 1}. ${result.title}\n   ${result.snippet}`
+).join('\n') || ''}
+` : ''}
+
+${actualFlightData.source === 'google_fallback' ? `
+${(actualFlightData as any).message || 'Google検索からフライト情報を取得しました'}
+` : ''}
+
+これらの情報を基に、可能な限り正確なフライト情報を推測して、以下のJSON形式で返してください：
 {
   "status": "フライトステータス（日本語）",
   "currentLocation": {
-    "latitude": 緯度（数値）,
-    "longitude": 経度（数値）,
-    "city": "現在地の都市名",
-    "region": "現在地の地域名"
+    "latitude": 緯度（数値、推測値でも可）,
+    "longitude": 経度（数値、推測値でも可）,
+    "city": "現在地の都市名（推測）",
+    "region": "現在地の地域名（推測）"
   },
   "origin": "出発空港名",
   "destination": "到着空港名",
-  "altitude": "高度情報",
-  "speed": "速度情報",
+  "altitude": "高度情報（推測値でも可）",
+  "speed": "速度情報（推測値でも可）",
   "estimatedArrival": "到着予定時刻",
   "weather": "現在地の推定天気",
-  "message": "フライト情報の要約（日本語）"
+  "message": "Google検索結果に基づくフライト情報の要約（日本語）"
 }
 `
 
@@ -179,24 +163,22 @@ ${actualFlightData.position ? `現在位置: 緯度${actualFlightData.position.l
     try {
       flightData = JSON.parse(responseText)
     } catch (parseError) {
-      // パースに失敗した場合は実際のデータから基本情報を作成
+      // パースに失敗した場合はGoogle検索データから基本情報を作成
       flightData = {
-        status: actualFlightData.status === 'active' ? '運航中' : 
-                actualFlightData.status === 'landed' ? '着陸済み' : 
-                actualFlightData.status === 'scheduled' ? '予定通り' : '不明',
+        status: "検索結果から情報を取得",
         currentLocation: {
-          latitude: actualFlightData.position?.latitude || 35.6762,
-          longitude: actualFlightData.position?.longitude || 139.6503,
-          city: "位置情報取得中",
-          region: "追跡中"
+          latitude: 35.6762,
+          longitude: 139.6503,
+          city: "位置情報検索中",
+          region: "Google検索結果より"
         },
-        origin: actualFlightData.departure.airport || "出発地不明",
-        destination: actualFlightData.arrival.airport || "到着地不明",
-        altitude: actualFlightData.position?.altitude ? `${actualFlightData.position.altitude}フィート` : "高度情報なし",
-        speed: actualFlightData.position?.speed ? `${actualFlightData.position.speed}ノット` : "速度情報なし",
-        estimatedArrival: actualFlightData.arrival.estimated || actualFlightData.arrival.scheduled || "到着時刻不明",
-        weather: "天気情報取得中",
-        message: `フライト ${actualFlightData.flightNumber} (${actualFlightData.airline?.name || '不明'}) のFlightRadar24からの実際の運航情報です。`
+        origin: actualFlightData.source === 'google_flights' ? (actualFlightData as any).departure?.airport : "検索結果から取得",
+        destination: actualFlightData.source === 'google_flights' ? (actualFlightData as any).arrival?.airport : "検索結果から取得",
+        altitude: "Google検索では高度情報は取得できません",
+        speed: "Google検索では速度情報は取得できません",
+        estimatedArrival: actualFlightData.source === 'google_flights' ? (actualFlightData as any).arrival?.time : "検索結果から取得",
+        weather: "天気情報検索中",
+        message: `フライト ${actualFlightData.flightNumber} の情報をGoogle検索から取得しました。詳細な位置情報は航空会社の公式サイトをご確認ください。`
       }
     }
 

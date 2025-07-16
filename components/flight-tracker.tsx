@@ -61,7 +61,7 @@ export function FlightTracker({ aircraftModel }: FlightTrackerProps) {
       }
 
       setFlightData(data)
-      toast.success("FlightRadar24から実際のフライト情報を取得しました")
+      toast.success("Google検索からフライト情報を取得しました")
     } catch (error: any) {
       toast.error(error.message || "フライト情報の取得に失敗しました")
       console.error("Flight tracking error:", error)
@@ -76,10 +76,10 @@ export function FlightTracker({ aircraftModel }: FlightTrackerProps) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-white">
             <Plane className="h-5 w-5" />
-            リアルタイムフライト追跡
+            Google検索フライト追跡
           </CardTitle>
           <CardDescription className="text-gray-400">
-            便名を入力して実際のフライト位置をリアルタイムで確認
+            便名を入力してGoogle検索でフライト情報を確認
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -95,7 +95,7 @@ export function FlightTracker({ aircraftModel }: FlightTrackerProps) {
               disabled={loading}
               className="bg-blue-600 hover:bg-blue-700"
             >
-              {loading ? "検索中..." : "実際の位置を追跡"}
+              {loading ? "検索中..." : "Google検索で追跡"}
             </Button>
           </div>
           {aircraftModel && (
@@ -104,7 +104,7 @@ export function FlightTracker({ aircraftModel }: FlightTrackerProps) {
             </p>
           )}
           <p className="text-xs text-gray-500">
-            ✈️ FlightRadar24 APIを使用してリアルタイムフライトデータを取得します
+            🔍 Google検索APIを使用してフライト情報を取得します
           </p>
         </CardContent>
       </Card>
@@ -114,7 +114,7 @@ export function FlightTracker({ aircraftModel }: FlightTrackerProps) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-white">
               <MapPin className="h-5 w-5" />
-              FlightRadar24 リアルタイム情報
+              Google検索結果
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
