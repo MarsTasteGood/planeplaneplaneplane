@@ -51,7 +51,7 @@ Provide realistic data for a ${aircraftModel} aircraft currently in operation.
 `
 
     const message = await anthropic.messages.create({
-      model: 'claude-3-sonnet-20240229',
+      model: 'claude-3-7-sonnet-20250219',
       max_tokens: 1000,
       messages: [{ role: 'user', content: prompt }],
     })
