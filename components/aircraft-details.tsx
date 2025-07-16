@@ -3,12 +3,13 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Plane, Users, MapPin, Calendar, Ruler, Zap } from "lucide-react"
+import { FlightTracker } from "@/components/flight-tracker"
 
 interface Aircraft {
   id: string
   name: string
   manufacturer: string
-  type: string
+  maxSpeed: string
   capacity: string
   range: string
   firstFlight: string
@@ -36,7 +37,7 @@ export function AircraftDetails({ aircraft }: AircraftDetailsProps) {
         <div className="flex items-center gap-4">
           <Badge className={`${manufacturerColor} text-white px-3 py-1`}>{aircraft.manufacturer}</Badge>
           <Badge variant="outline" className="border-gray-600 text-gray-300">
-            {aircraft.type}
+            最高速度: {aircraft.maxSpeed}
           </Badge>
         </div>
         <h1 className="text-4xl lg:text-5xl font-bold text-white">{aircraft.name}</h1>
@@ -84,8 +85,8 @@ export function AircraftDetails({ aircraft }: AircraftDetailsProps) {
         <Card className="bg-gray-900 border-gray-800">
           <CardContent className="p-4 text-center">
             <Plane className="h-8 w-8 text-orange-400 mx-auto mb-2" />
-            <p className="text-sm text-gray-400">Type</p>
-            <p className="text-lg font-semibold text-white">{aircraft.type}</p>
+            <p className="text-sm text-gray-400">Max Speed</p>
+            <p className="text-lg font-semibold text-white">{aircraft.maxSpeed}</p>
           </CardContent>
         </Card>
       </div>
@@ -133,6 +134,9 @@ export function AircraftDetails({ aircraft }: AircraftDetailsProps) {
           </div>
         </CardContent>
       </Card>
+
+      {/* Flight Tracker */}
+      <FlightTracker aircraftModel={aircraft.name} />
     </div>
   )
 }

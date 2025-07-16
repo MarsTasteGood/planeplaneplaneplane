@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Users, MapPin, Calendar, Ruler, Zap, Gauge } from "lucide-react"
+import { FlightTracker } from "@/components/flight-tracker"
 
 interface Aircraft {
   id: string
@@ -142,6 +143,9 @@ export function AircraftGrid({ aircraftData }: AircraftGridProps) {
               </div>
             </CardContent>
           </Card>
+
+          {/* Flight Tracker */}
+          <FlightTracker aircraftModel={aircraft.name} />
         </div>
       ))}
     </div>
