@@ -4,6 +4,8 @@ import Anthropic from '@anthropic-ai/sdk'
 // OpenSky Network APIを使用してリアルタイムフライトデータを取得する関数
 async function getOpenSkyFlightData(flightNumber: string) {
   try {
+    console.log(`🔍 Searching for flight: ${flightNumber}`)
+    
     // まず全てのフライトを取得してフライト番号で検索
     const response = await fetch('https://opensky-network.org/api/states/all', {
       headers: {
@@ -18,25 +20,58 @@ async function getOpenSkyFlightData(flightNumber: string) {
     const data = await response.json()
     
     if (!data.states || data.states.length === 0) {
+      console.log('❌ No flight data available from OpenSky')
       return null
     }
     
-    // フライト番号で検索（部分一致も含む）
-    const matchingFlights = data.states.filter((state: any[]) => {
-      const callsign = state[1]?.trim()
-      return callsign && (
-        callsign === flightNumber ||
-        callsign.includes(flightNumber) ||
-        flightNumber.includes(callsign)
-      )
-    })
+    console.log(`📊 Total flights available: ${data.states.length}`)
     
-    if (matchingFlights.length === 0) {
+    // より柔軟な検索パターンを作成
+    const searchPatterns = [
+      flightNumber.toUpperCase().trim(),
+      flightNumber.toLowerCase().trim(),
+      flightNumber.replace(/\s+/g, ''),
+      // 数字を4桁にパディング (JAL123 -> JAL0123)
+      flightNumber.replace(/([A-Za-z]+)(\d+)/, (match, prefix, number) => 
+        `${prefix.toUpperCase()}${number.padStart(4, '0')}`
+      ),
+      // 逆パターンもチェック (JAL0123 -> JAL123)
+      flightNumber.replace(/([A-Za-z]+)0+(\d+)/, (match, prefix, number) => 
+        `${prefix.toUpperCase()}${number}`
+      )
+    ]
+    
+    console.log(`🔍 Search patterns: ${searchPatterns.join(', ')}`)
+    
+    // フライト番号で検索（複数パターンを試行）
+    let matchingFlight = null
+    
+    for (const pattern of searchPatterns) {
+      matchingFlight = data.states.find((state: any[]) => {
+        const callsign = state[1]?.trim()
+        if (!callsign) return false
+        
+        const cleanCallsign = callsign.replace(/\s+/g, '')
+        const cleanPattern = pattern.replace(/\s+/g, '')
+        
+        return cleanCallsign === cleanPattern ||
+               cleanCallsign.includes(cleanPattern) ||
+               cleanPattern.includes(cleanCallsign)
+      })
+      
+      if (matchingFlight) {
+        console.log(`✅ Found flight with pattern "${pattern}": ${matchingFlight[1]}`)
+        break
+      }
+    }
+    
+    if (!matchingFlight) {
+      console.log('❌ No matching flight found')
       return null
     }
     
     // 最初にマッチしたフライトを使用
-    const flight = matchingFlights[0]
+    const flight = matchingFlight
     
     return {
       source: 'opensky',
@@ -136,43 +171,65 @@ export async function POST(req: NextRequest) {
       apiKey: process.env.ANTHROPIC_API_KEY,
     })
 
+    // Claude APIキーが正しく設定されているかチェック
+    if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'ANTHROPIC_API_KEY') {
+      console.log('⚠️ Claude API key not configured, using basic OpenSky data only')
+      
+      // APIキーが設定されていない場合はOpenSkyデータから直接作成
+      const basicFlightData = {
+        status: actualFlightData.on_ground ? "地上" : "飛行中",
+        currentLocation: {
+          latitude: actualFlightData.latitude || 35.6762,
+          longitude: actualFlightData.longitude || 139.6503,
+          city: "位置解析中...",
+          region: actualFlightData.origin_country || "不明"
+        },
+        origin: actualFlightData.origin_country || "不明",
+        destination: "到着地解析中...",
+        altitude: actualFlightData.baro_altitude ? `${actualFlightData.baro_altitude}m` : "不明",
+        speed: actualFlightData.velocity ? `${Math.round(actualFlightData.velocity * 3.6)}km/h` : "不明",
+        estimatedArrival: "計算中...",
+        weather: "天気情報取得中...",
+        message: `✈️ フライト ${actualFlightData.callsign || flightNumber} のリアルタイムデータを表示中です（OpenSky Network APIより）`
+      }
+      
+      return NextResponse.json(basicFlightData)
+    }
+
     // 実際のデータを基にClaude AIで追加情報を生成
     const prompt = `
-以下のOpenSky Network APIから取得したリアルタイムフライトデータを基に、日本語でわかりやすく整理して表示してください：
+以下のOpenSky Network APIから取得したリアルタイムフライトデータを日本語で解析してください。
 
-フライト番号/コールサイン: ${flightNumber} (実際: ${actualFlightData.callsign})
-データソース: ${actualFlightData.source}
-出発国: ${actualFlightData.origin_country}
-現在位置: 緯度${actualFlightData.latitude}, 経度${actualFlightData.longitude}
-高度: ${actualFlightData.baro_altitude}メートル (${actualFlightData.geo_altitude}メートル)
-地上状態: ${actualFlightData.on_ground ? '地上' : '飛行中'}
-速度: ${actualFlightData.velocity}m/s
-進行方向: ${actualFlightData.true_track}度
-垂直速度: ${actualFlightData.vertical_rate}m/s
-ICAO24コード: ${actualFlightData.icao24}
-最終接触時刻: ${new Date((actualFlightData.last_contact || 0) * 1000).toISOString()}
+フライトデータ:
+- コールサイン: ${actualFlightData.callsign || flightNumber}
+- 出発国: ${actualFlightData.origin_country}
+- 現在位置: 緯度${actualFlightData.latitude}, 経度${actualFlightData.longitude}
+- 高度: ${actualFlightData.baro_altitude}m
+- 速度: ${actualFlightData.velocity}m/s (${Math.round((actualFlightData.velocity || 0) * 3.6)}km/h)
+- 地上状態: ${actualFlightData.on_ground ? '地上' : '飛行中'}
+- 進行方向: ${actualFlightData.true_track}度
 
-これらの実際のリアルタイムデータを基に、以下のJSON形式で返してください：
+以下のJSONフォーマットで必ず返答してください（他の文章は一切含めず、JSONのみを返してください）:
+
 {
-  "status": "フライトステータス（日本語）",
+  "status": "${actualFlightData.on_ground ? '地上' : '飛行中'}",
   "currentLocation": {
-    "latitude": ${actualFlightData.latitude},
-    "longitude": ${actualFlightData.longitude},
-    "city": "現在地の都市名（推測）",
-    "region": "現在地の地域名（推測）"
+    "latitude": ${actualFlightData.latitude || 35.6762},
+    "longitude": ${actualFlightData.longitude || 139.6503},
+    "city": "現在地の都市名を推測",
+    "region": "${actualFlightData.origin_country || '不明'}"
   },
-  "origin": "出発地（${actualFlightData.origin_country}より推測）",
-  "destination": "到着地（推測）",
-  "altitude": "${actualFlightData.baro_altitude}m",
+  "origin": "出発地を推測",
+  "destination": "到着地を推測", 
+  "altitude": "${actualFlightData.baro_altitude || 0}m",
   "speed": "${Math.round((actualFlightData.velocity || 0) * 3.6)}km/h",
-  "estimatedArrival": "到着予定時刻（推測）",
-  "weather": "現在地の推定天気",
-  "message": "OpenSky Network APIからのリアルタイム航空機追跡データです。"
-}
-`
+  "estimatedArrival": "到着予定時刻を推測",
+  "weather": "現在地の天気を推測",
+  "message": "OpenSky Network APIからのリアルタイム追跡データ"
+}`
 
     const message = await anthropic.messages.create({
-      model: 'claude-3-7-sonnet-20250219',
+      model: 'claude-sonnet-4-20250514',
       max_tokens: 1000,
       messages: [{ role: 'user', content: prompt }],
     })
@@ -182,8 +239,24 @@ ICAO24コード: ${actualFlightData.icao24}
     // JSONレスポンスをパース
     let flightData
     try {
-      flightData = JSON.parse(responseText)
+      // レスポンスからJSONのみを抽出
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/)
+      const jsonString = jsonMatch ? jsonMatch[0] : responseText
+      
+      console.log('Claude AI response:', responseText)
+      console.log('Extracted JSON:', jsonString)
+      
+      flightData = JSON.parse(jsonString)
+      
+      // 必須フィールドの検証
+      if (!flightData.status || !flightData.currentLocation) {
+        throw new Error('Invalid response structure')
+      }
+      
     } catch (parseError) {
+      console.error('JSON parse error:', parseError)
+      console.error('Raw response:', responseText)
+      
       // パースに失敗した場合はOpenSkyデータから基本情報を作成
       flightData = {
         status: actualFlightData.on_ground ? "地上" : "飛行中",
