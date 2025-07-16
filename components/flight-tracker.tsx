@@ -36,8 +36,8 @@ export function FlightTracker({ aircraftModel }: FlightTrackerProps) {
   const [loading, setLoading] = useState(false)
 
   const trackFlight = async () => {
-    if (!aircraftModel && !flightNumber) {
-      toast.error("航空機モデルまたは便名を入力してください")
+    if (!flightNumber) {
+      toast.error("便名を入力してください（例: JL123, NH456, UA789）")
       return
     }
 
@@ -50,19 +50,20 @@ export function FlightTracker({ aircraftModel }: FlightTrackerProps) {
         },
         body: JSON.stringify({
           aircraftModel,
-          flightNumber,
+          flightNumber: flightNumber.toUpperCase(),
         }),
       })
 
+      const data = await response.json()
+      
       if (!response.ok) {
-        throw new Error("フライト情報の取得に失敗しました")
+        throw new Error(data.error || "フライト情報の取得に失敗しました")
       }
 
-      const data = await response.json()
       setFlightData(data)
-      toast.success("フライト情報を取得しました")
-    } catch (error) {
-      toast.error("フライト情報の取得に失敗しました")
+      toast.success("FlightRadar24から実際のフライト情報を取得しました")
+    } catch (error: any) {
+      toast.error(error.message || "フライト情報の取得に失敗しました")
       console.error("Flight tracking error:", error)
     } finally {
       setLoading(false)
@@ -75,16 +76,16 @@ export function FlightTracker({ aircraftModel }: FlightTrackerProps) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-white">
             <Plane className="h-5 w-5" />
-            フライト追跡
+            リアルタイムフライト追跡
           </CardTitle>
           <CardDescription className="text-gray-400">
-            {aircraftModel ? `${aircraftModel}の現在位置を確認` : "便名を入力してフライトを追跡"}
+            便名を入力して実際のフライト位置をリアルタイムで確認
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex gap-2">
             <Input
-              placeholder="便名を入力 (例: JL123)"
+              placeholder="便名を入力 (例: JL123, NH456, UA789)"
               value={flightNumber}
               onChange={(e) => setFlightNumber(e.target.value)}
               className="bg-gray-800 border-gray-600 text-white placeholder-gray-400"
@@ -94,7 +95,7 @@ export function FlightTracker({ aircraftModel }: FlightTrackerProps) {
               disabled={loading}
               className="bg-blue-600 hover:bg-blue-700"
             >
-              {loading ? "検索中..." : "追跡"}
+              {loading ? "検索中..." : "実際の位置を追跡"}
             </Button>
           </div>
           {aircraftModel && (
@@ -102,6 +103,9 @@ export function FlightTracker({ aircraftModel }: FlightTrackerProps) {
               対象機種: <span className="text-white">{aircraftModel}</span>
             </p>
           )}
+          <p className="text-xs text-gray-500">
+            ✈️ FlightRadar24 APIを使用してリアルタイムフライトデータを取得します
+          </p>
         </CardContent>
       </Card>
 
@@ -110,7 +114,7 @@ export function FlightTracker({ aircraftModel }: FlightTrackerProps) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-white">
               <MapPin className="h-5 w-5" />
-              現在のフライト情報
+              FlightRadar24 リアルタイム情報
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
